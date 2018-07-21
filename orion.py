@@ -36,7 +36,7 @@ def take_photo():
         camera.capture('image.jpg')
     
     
-def use_computer_vision():
+def use_computer_vision(label_picture=True):
     #take picture
     take_photo()
     
@@ -44,32 +44,115 @@ def use_computer_vision():
     credentials = GoogleCredentials.get_application_default()
     service = discovery.build('vision', 'v1', credentials=credentials)
     
-    with open('image.jpg','rb') as image:
-        image_content = base64.b64encode(image.read())
-        service_request = service.images().annotate(body={
-            'requests':[{
-                
-                'image':{
-                        'content': image_content.decode('UTF-8')
-                    },
-                'features':[{
-                        'type': 'LABEL_DETECTION',
-                        'maxResults': 100,
+    if label_picture:
+        with open('image.jpg','rb') as image:
+            image_content = base64.b64encode(image.read())
+            service_request = service.images().annotate(body={
+                'requests':[{
+                    'image':{
+                            'content': image_content.decode('UTF-8')
+                        },
+                    'features':[{
+                            'type': 'LABEL_DETECTION',
+                            'maxResults': 100,
+                        }]
                     }]
+                })
+
+            response = service_request.execute()
+            print(json.dumps(response, indent=4, sort_keys=True))
+
+            response_list = []
+            for i in range(3):
+                clean_classification = response['responses'][0]['labelAnnotations'][i]['description']
+                response_list.append(clean_classification)
+
+
+            return response_list
+    else:
+        with open('image.jpg','rb') as image:
+            image_content = base64.b64encode(image.read())
+            service_request = service.images().annotate(body={
+                'requests':[{
+                    'image':{
+                            'content': image_content.decode('UTF-8')
+                        },
+                    'features':[{
+                            'type': 'FACE_DETECTION',
+                        }]
+                    }]
+                })
+
+            response = service_request.execute()
+            print(json.dumps(response, indent=4, sort_keys=True))
+            response_list = response['responses'][0]['faceAnnotations'][0]
+            emotion_dict = {}
+            emotion_dict['surprised'] = response_list['surpriseLikelihood']
+            emotion_dict['angry'] = response_list['angerLikelihood']
+            emotion_dict['sad'] = response_list['sorrowLikelihood']
+            emotion_dict['happy'] = response_list['joyLikelihood']
+            
+            l = []
+            
+            for key,value in emotion_dict.items():
+                if(value == "VERY_LIKELY"):
+                    l.append((key,5))
+                elif(value == "LIKELY"):
+                    l.append((key,4))
+                elif(value == "POSSIBLE"):
+                    l.append((key,3))
+                elif(value == "UNLIKELY"):
+                    l.append((key,2))
+                else:
+                    l.append((key,1))
+                    
+            l.sort(key=lambda tup:tup[1], reverse=True)
+            print("WORKING")
+            emotion = l[0][0]
+            print(emotion)
+            return emotion
+            
                 
-                }]
-            })
+
+##def sort_emotions(lst):
+##    dict_emotions = {'VERY_UNLIKELY': 0, 'UNLIKELY': 1, 'POSSIBLE': 2, 'LIKELY': 3, 'VERY_LIKELY': 4}
+##    for emotion in lst:
+        
     
-        response = service_request.execute()
-        print(json.dumps(response, indent=4, sort_keys=True))
-        
-        response_list = []
-        for i in range(3):
-            clean_classification = response['responses'][0]['labelAnnotations'][i]['description']
-            response_list.append(clean_classification)
-        
-        
-        return response_list
+
+def say(assistant, text):
+    assistant.send_text_query('Repeat after me {}'.format(text))
+
+
+def handle_what_is_this(assistant):
+    say(assistant, "hmm, let me take a look")
+    verbal_list = use_computer_vision()
+    if "face" in verbal_list:
+        emotion = use_computer_vision(False)
+        say(assistant, "I see "+verbal_list[0] + ", or " + verbal_list[1] + ", or " + verbal_list[2] + ", " + "and the face looks " + " " + emotion)
+    else:
+        say(assistant, "I see "+verbal_list[0] + ", or " + verbal_list[1] + ", or " + verbal_list[2])
+
+
+def handle_ship_it(assistant):
+    say(assistant, 'Stop trying to be Sarah Cooper')
+
+def handle_what_do_you_think(assistant):
+    say(assistant, 'Ship it')
+
+def handle_meet_your_maker(assistant):
+    say(assistant,
+       'I was created at the Google New York IOT Intern Hackathon by'
+       'Stephen, Charlotte, David, Nishir, and Two')
+
+
+TRIGGERS = {
+    'what is this': handle_what_is_this,
+    'what is that': handle_what_is_this,
+    'ship it': handle_ship_it,
+    'what do you think': handle_what_do_you_think,
+    'meet your maker': handle_meet_your_maker,
+}
 
 def process_event(event, assistant):
     """Pretty prints events.
@@ -89,15 +172,16 @@ def process_event(event, assistant):
     if event.type == EventType.ON_DEVICE_ACTION:
         for command, params in event.actions:
             print('Do command', command, 'with params', str(params))
+
     if (event.type == EventType.ON_RECOGNIZING_SPEECH_FINISHED and
-            event.args and "what is this" in event.args["text"]):
-        assistant.stop_conversation()
-        assistant.send_text_query("Repeat after me" + " hmm, let me take a look")
-        verbal_list = use_computer_vision()
-        assistant.send_text_query("Repeat after me " + " I see "+verbal_list[0] + ", or " + verbal_list[1] + ", or " + verbal_list[2])
-        
-        
-    
+            event.args and 'text' in event.args):
+        text = event.args['text']
+        for trigger, handler in TRIGGERS.items():
+            if trigger in text:
+                assistant.stop_conversation()
+                handler(assistant)
+                break
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -173,6 +257,8 @@ def main():
                     }, f)
             else:
                 print(WARNING_NOT_REGISTERED)
+
+        assistant.send_text_query("Repeat after me" + " Welcome to Orion!")
 
         for event in events:
             process_event(event, assistant)
